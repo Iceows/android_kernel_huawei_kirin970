@@ -183,7 +183,7 @@ static void spoof_hash_auth(unsigned char *hash_buf, char *pkg_name)
 		tlogi("Spoof now %s process\n",pkg_name);
 		memcpy(hash_buf, fingerprint_hash, MAX_SHA_256_SZ);
 	}
-	if (!strncmp(pkg_name, "/vendor/preavs/bin/hw/android.hardware.drm@1.2-service.widevine", 63)) {
+	if (!strncmp(pkg_name, "/vendor/bin/hw/android.hardware.drm@1.2-service.widevine", 63)) {
 		tlogi("Spoof now %s process\n",pkg_name);
 		memcpy(hash_buf, widewine_alloc_hash, MAX_SHA_256_SZ);
 	}
