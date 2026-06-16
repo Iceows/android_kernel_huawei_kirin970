@@ -508,12 +508,16 @@ void host_send_disallow_msg(struct work_struct *work)
         }
         PS_PRINT_INFO("tty state: 0x%x ,loop_tty_resume_cnt:%d\n", tty_port_suspended(ps_core_d->tty->port),  loop_tty_resume_cnt);
 #else
-        PS_PRINT_INFO("tty port flag 0x%x\n", (unsigned int)ps_core_d->tty->port->flags);
-        while(test_bit(ASYNCB_SUSPENDED, (volatile unsigned long*)&(ps_core_d->tty->port->flags)))
+        PS_PRINT_INFO("tty port iflags 0x%lx, suspended=%d\n",
+	      ps_core_d->tty->port->iflags,
+	      tty_port_suspended(ps_core_d->tty->port));
+        while (tty_port_suspended(ps_core_d->tty->port))
         {
             if(loop_tty_resume_cnt++ >= MAX_TTYRESUME_LOOPCNT)
             {
-                PS_PRINT_ERR("tty is not ready, flag is 0x%x!\n", (unsigned int)ps_core_d->tty->port->flags);
+                PS_PRINT_ERR("tty is not ready, iflags=0x%lx, suspended=%d!\n",
+	     		ps_core_d->tty->port->iflags,
+	     		tty_port_suspended(ps_core_d->tty->port));
                 break;
             }
             msleep(10);
