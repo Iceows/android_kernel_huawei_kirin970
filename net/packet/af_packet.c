@@ -807,7 +807,7 @@ static void prb_close_block(struct tpacket_kbdq_core *pkc1,
 	struct tpacket_hdr_v1 *h1 = &pbd1->hdr.bh1;
 	struct sock *sk = &po->sk;
 
-	if (atomic_read(&po->tp_drops))
+	if (po->stats.stats3.tp_drops)
 		status |= TP_STATUS_LOSING;
 
 	last_pkt = (struct tpacket3_hdr *)pkc1->prev;
@@ -1504,7 +1504,7 @@ static int packet_rcv_fanout(struct sk_buff *skb, struct net_device *dev,
 
 	po = pkt_sk(f->arr[idx]);
 
-	if (!po->prot_hook.func) {
+	if (po->prot_hook.func == NULL) {
 		pr_err("packet_rcv_fanout prot_hook.func null.");
 		kfree_skb(skb);
 		return 0;
@@ -2179,8 +2179,10 @@ static int packet_rcv(struct sk_buff *skb, struct net_device *dev,
 
 drop_n_acct:
 	is_drop_n_account = true;
-	atomic_inc(&po->tp_drops);
+	spin_lock(&sk->sk_receive_queue.lock);
+	po->stats.stats1.tp_drops++;
 	atomic_inc(&sk->sk_drops);
+	spin_unlock(&sk->sk_receive_queue.lock);
 
 drop_n_restore:
 	if (skb_head != skb->data && skb_shared(skb)) {
@@ -2206,8 +2208,7 @@ static int tpacket_rcv(struct sk_buff *skb, struct net_device *dev,
 	int skb_len = skb->len;
 	unsigned int snaplen, res;
 	unsigned long status = TP_STATUS_USER;
-	unsigned short macoff, hdrlen;
-	unsigned int netoff;
+	unsigned short macoff, netoff, hdrlen;
 	struct sk_buff *copy_skb = NULL;
 	struct timespec ts;
 	__u32 ts_status;
@@ -2269,10 +2270,6 @@ static int tpacket_rcv(struct sk_buff *skb, struct net_device *dev,
 			do_vnet = true;
 		}
 		macoff = netoff - maclen;
-	}
-	if (netoff > USHRT_MAX) {
-		atomic_inc(&po->tp_drops);
-		goto drop_n_restore;
 	}
 	if (po->tp_version <= TPACKET_V2) {
 		if (macoff + snaplen > po->rx_ring.frame_size) {
@@ -2337,7 +2334,7 @@ static int tpacket_rcv(struct sk_buff *skb, struct net_device *dev,
 	 * Anyways, moving it for V1/V2 only as V3 doesn't need this
 	 * at packet level.
 	 */
-		if (atomic_read(&po->tp_drops))
+		if (po->stats.stats1.tp_drops)
 			status |= TP_STATUS_LOSING;
 	}
 
@@ -2450,9 +2447,9 @@ drop:
 	return 0;
 
 drop_n_account:
-	spin_unlock(&sk->sk_receive_queue.lock);
-	atomic_inc(&po->tp_drops);
 	is_drop_n_account = true;
+	po->stats.stats1.tp_drops++;
+	spin_unlock(&sk->sk_receive_queue.lock);
 
 	sk->sk_data_ready(sk);
 	kfree_skb(copy_skb);
@@ -2467,7 +2464,7 @@ static void tpacket_destruct_skb(struct sk_buff *skb)
 		void *ph;
 		__u32 ts;
 
-		ph = skb_zcopy_get_nouarg(skb);
+		ph = skb_shinfo(skb)->destructor_arg;
 		packet_dec_pending(&po->tx_ring);
 
 		ts = __packet_set_timestamp(po, ph, skb);
@@ -2536,7 +2533,7 @@ static int tpacket_fill_skb(struct packet_sock *po, struct sk_buff *skb,
 	skb->priority = po->sk.sk_priority;
 	skb->mark = po->sk.sk_mark;
 	sock_tx_timestamp(&po->sk, sockc->tsflags, &skb_shinfo(skb)->tx_flags);
-	skb_zcopy_set_nouarg(skb, ph.raw);
+	skb_shinfo(skb)->destructor_arg = ph.raw;
 
 	skb_reserve(skb, hlen);
 	skb_reset_network_header(skb);
@@ -2788,9 +2785,6 @@ static int tpacket_snd(struct packet_sock *po, struct msghdr *msg)
 				err = len_sum;
 			goto out_status;
 		}
-#ifdef CONFIG_HISI_PAGE_TRACE
-		alloc_skb_with_frags_stats_inc(TPACKET_SND_COUNT);
-#endif
 		tp_len = tpacket_fill_skb(po, skb, ph, dev, data, tp_len, proto,
 					  addr, hlen, copylen, &sockc);
 		if (likely(tp_len >= 0) &&
@@ -2881,9 +2875,7 @@ static struct sk_buff *packet_alloc_skb(struct sock *sk, size_t prepad,
 				   err, 0);
 	if (!skb)
 		return NULL;
-#ifdef CONFIG_HISI_PAGE_TRACE
-	alloc_skb_with_frags_stats_inc(PACKET_ALLOC_SKB_COUNT);
-#endif
+
 	skb_reserve(skb, reserve);
 	skb_put(skb, linear);
 	skb->data_len = len - linear;
@@ -3970,7 +3962,6 @@ static int packet_getsockopt(struct socket *sock, int level, int optname,
 	void *data = &val;
 	union tpacket_stats_u st;
 	struct tpacket_rollover_stats rstats;
-	int drops;
 
 	if (level != SOL_PACKET)
 		return -ENOPROTOOPT;
@@ -3987,17 +3978,14 @@ static int packet_getsockopt(struct socket *sock, int level, int optname,
 		memcpy(&st, &po->stats, sizeof(st));
 		memset(&po->stats, 0, sizeof(po->stats));
 		spin_unlock_bh(&sk->sk_receive_queue.lock);
-		drops = atomic_xchg(&po->tp_drops, 0);
 
 		if (po->tp_version == TPACKET_V3) {
 			lv = sizeof(struct tpacket_stats_v3);
-			st.stats3.tp_drops = drops;
-			st.stats3.tp_packets += drops;
+			st.stats3.tp_packets += st.stats3.tp_drops;
 			data = &st.stats3;
 		} else {
 			lv = sizeof(struct tpacket_stats);
-			st.stats1.tp_drops = drops;
-			st.stats1.tp_packets += drops;
+			st.stats1.tp_packets += st.stats1.tp_drops;
 			data = &st.stats1;
 		}
 
