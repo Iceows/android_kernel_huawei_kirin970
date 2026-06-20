@@ -226,7 +226,7 @@ static void * r10buf_pool_alloc(gfp_t gfp_flags, void *data)
 
 out_free_pages:
 	while (--j >= 0)
-		resync_free_pages(&rps[j]);
+		resync_free_pages(&rps[j * 2]);
 
 	j = 0;
 out_free_bio:
@@ -1190,7 +1190,9 @@ static void raid10_read_request(struct mddev *mddev, struct bio *bio,
 		struct bio *split = bio_split(bio, max_sectors,
 					      gfp, conf->bio_split);
 		bio_chain(split, bio);
+		allow_barrier(conf);
 		generic_make_request(bio);
+		wait_barrier(conf);
 		bio = split;
 		r10_bio->master_bio = bio;
 		r10_bio->sectors = max_sectors;
@@ -1479,7 +1481,9 @@ retry_write:
 		struct bio *split = bio_split(bio, r10_bio->sectors,
 					      GFP_NOIO, conf->bio_split);
 		bio_chain(split, bio);
+		allow_barrier(conf);
 		generic_make_request(bio);
+		wait_barrier(conf);
 		bio = split;
 		r10_bio->master_bio = bio;
 	}
@@ -4397,11 +4401,12 @@ static sector_t reshape_request(struct mddev *mddev, sector_t sector_nr,
 		allow_barrier(conf);
 	}
 
+	raise_barrier(conf, 0);
 read_more:
 	/* Now schedule reads for blocks from sector_nr to last */
 	r10_bio = raid10_alloc_init_r10buf(conf);
 	r10_bio->state = 0;
-	raise_barrier(conf, sectors_done != 0);
+	raise_barrier(conf, 1);
 	atomic_set(&r10_bio->remaining, 0);
 	r10_bio->mddev = mddev;
 	r10_bio->sector = sector_nr;
@@ -4492,10 +4497,11 @@ read_more:
 	atomic_inc(&r10_bio->remaining);
 	read_bio->bi_next = NULL;
 	generic_make_request(read_bio);
-	sector_nr += nr_sectors;
 	sectors_done += nr_sectors;
 	if (sector_nr <= last)
 		goto read_more;
+
+	lower_barrier(conf);
 
 	/* Now that we have done the whole section we can
 	 * update reshape_progress
@@ -4590,14 +4596,17 @@ static int handle_reshape_read_error(struct mddev *mddev,
 	/* Use sync reads to get the blocks from somewhere else */
 	int sectors = r10_bio->sectors;
 	struct r10conf *conf = mddev->private;
-	struct {
-		struct r10bio r10_bio;
-		struct r10dev devs[conf->copies];
-	} on_stack;
-	struct r10bio *r10b = &on_stack.r10_bio;
+	struct r10bio *r10b;
 	int slot = 0;
 	int idx = 0;
 	struct page **pages;
+
+	r10b = kmalloc(sizeof(*r10b) +
+	       sizeof(struct r10dev) * conf->copies, GFP_NOIO);
+	if (!r10b) {
+		set_bit(MD_RECOVERY_INTR, &mddev->recovery);
+		return -ENOMEM;
+	}
 
 	/* reshape IOs share pages from .devs[0].bio */
 	pages = get_resync_pages(r10_bio->devs[0].bio)->pages;
@@ -4647,11 +4656,13 @@ static int handle_reshape_read_error(struct mddev *mddev,
 			/* couldn't read this block, must give up */
 			set_bit(MD_RECOVERY_INTR,
 				&mddev->recovery);
+			kfree(r10b);
 			return -EIO;
 		}
 		sectors -= s;
 		idx++;
 	}
+	kfree(r10b);
 	return 0;
 }
 
