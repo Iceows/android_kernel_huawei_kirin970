@@ -2678,6 +2678,16 @@ uint32_t dm_next_uevent_seq(struct mapped_device *md)
 	return atomic_add_return(1, &md->uevent_seq);
 }
 
+#ifdef CONFIG_HUAWEI_STORAGE_ROFA
+const struct bio *dm_get_tio_bio(struct bio *bio)
+{
+	struct dm_target_io *tio =
+			container_of(bio, struct dm_target_io, clone);
+
+	return tio->io->bio;
+}
+#endif
+
 uint32_t dm_get_event_nr(struct mapped_device *md)
 {
 	return atomic_read(&md->event_nr);
