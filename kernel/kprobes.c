@@ -1557,14 +1557,14 @@ static int check_kprobe_address_safe(struct kprobe *p,
 	jump_label_lock();
 	preempt_disable();
 
-	/* Ensure it is not in reserved area nor out of text */
-	if (!kernel_text_address((unsigned long) p->addr) ||
-	    within_kprobe_blacklist((unsigned long) p->addr) ||
-	    jump_label_text_reserved(p->addr, p->addr) ||
-	    find_bug((unsigned long)p->addr)) {
-		ret = -EINVAL;
-		goto out;
-	}
+	if (!(core_kernel_text((unsigned long) p->addr) ||
+            is_module_text_address((unsigned long) p->addr)) ||
+            within_kprobe_blacklist((unsigned long) p->addr) ||
+            jump_label_text_reserved(p->addr, p->addr) ||
+            find_bug((unsigned long)p->addr)) {
+               ret = -EINVAL;
+               goto out;
+        }
 
 	/* Check if are we probing a module */
 	*probed_mod = __module_text_address((unsigned long) p->addr);
