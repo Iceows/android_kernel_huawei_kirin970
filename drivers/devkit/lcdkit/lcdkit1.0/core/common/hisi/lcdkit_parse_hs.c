@@ -126,8 +126,12 @@ void lcdkit_parse_platform_dts(struct device_node* np,  void* pdata)
 		OF_PROPERTY_READ_U32_DEFAULT(np,"hw,lcdkit-imax-lcd-luminance",&pinfo->hiace_param.iMaxLcdLuminance,0);
 		OF_PROPERTY_READ_U32_DEFAULT(np,"hw,lcdkit-imin-lcd-luminance",&pinfo->hiace_param.iMinLcdLuminance,0);
 		lcdkit_info.panel_infos.hiace_chCfgName = (char*)of_get_property(np, "hw,lcdkit-cfg-name", NULL);
-		strncpy(pinfo->hiace_param.chCfgName, lcdkit_info.panel_infos.hiace_chCfgName, sizeof(pinfo->hiace_param.chCfgName)-1);
-		LCDKIT_INFO("chname:%s\n",lcdkit_info.panel_infos.hiace_chCfgName);
+		
+		//strncpy(pinfo->hiace_param.chCfgName, lcdkit_info.panel_infos.hiace_chCfgName, sizeof(pinfo->hiace_param.chCfgName)-1);
+		strncpy(pinfo->hiace_param.chCfgName, "/odm/etc/display/effect/algorithm/hdr_engine.xml",48);
+		
+		LCDKIT_INFO("hw,lcdkit-cfg-name :%s\n",lcdkit_info.panel_infos.hiace_chCfgName);
+		LCDKIT_INFO("replace by :%s\n",pinfo->hiace_param.chCfgName);
 	}
 
 	OF_PROPERTY_READ_U32_RETURN(np, "hw,lcdkit-color-temp-rectify-r", &pinfo->color_temp_rectify_R);
